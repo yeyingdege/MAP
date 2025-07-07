@@ -1,84 +1,103 @@
-from utils import *
-from torch import backends
-from torch import save
-from torchsummary import summary
-import gc
+import os
+import argparse
+import torch
+import numpy as np
+from torch.utils.tensorboard import SummaryWriter
+from config.config import _C as cfg
+import util.distributed as du
+from dataset import get_dataloaders
+from generation import generation
+from utils import initialize_training, model_epoch_new, auto_convergence, analyse_inputs, setup_logger
 
 
-def main(configs):
-    experiment = get_comet_experiment(configs)
-    print('one')
-    model, optimizer, dataDims = initialize_training(configs)
-    #model.cpu()
+def main():
+    parser = argparse.ArgumentParser(description="MAP Training")
+    parser.add_argument(
+        "--config-file",
+        default="config/train_water.yaml",
+        metavar="FILE",
+        help="path to config file",
+        type=str,
+    )
+    args = parser.parse_args()
+    cfg.merge_from_file(args.config_file)
+    # Set random seed from configs.
+    np.random.seed(cfg.RNG_SEED)
+    torch.manual_seed(cfg.RNG_SEED)
 
-   # gc.collect()
+    model, optimizer = initialize_training(cfg)
+    tr, te, dataDims = get_dataloaders(cfg)
+
     torch.cuda.empty_cache()
+    local_world_size = min(torch.cuda.device_count(), cfg.NUM_GPUS)
 
-    #   log_input_stats(configs, experiment, input_analysis)
+    os.makedirs(cfg.OUTPUT_DIR, exist_ok=True)
+    if du.is_master_proc(num_gpus=local_world_size):
+        writer = SummaryWriter(log_dir=cfg.OUTPUT_DIR)
+        logger = setup_logger(os.path.join(cfg.OUTPUT_DIR, 'log.txt'))
+        logger.info("Train with config:")
+        logger.info(cfg)
+        num_trainable_params = sum(param.numel() for param in model.parameters() if param.requires_grad)
+        logger.info("Number of trainable params:", num_trainable_params)
+        # input_analysis = analyse_inputs(cfg, dataDims, dataset=tr.dataset)
+        # logger.info(f'Input Analysis:\n{input_analysis}')
+        # logger.info('Imported and Analyzed Training Dataset {}'.format(cfg.training_dataset))
+    else:
+        writer = None
 
-    print('Imported and Analyzed Training Dataset {}'.format(configs.training_dataset))
+    epoch = 1
+    converged = 0
+    tr_err_hist = []
+    te_err_hist = []
 
-    # if configs.CUDA:
-    #     backends.cudnn.benchmark = True  # auto-optimizes certain backend processes
-    #     model = nn.DistributedDataParallel(model)  # go to multi-GPU training
-    #     print("Using", torch.cuda.device_count(), "GPUs")
-    #     model.to(torch.device("cuda:0"))
-    #     #print(summary(model, [(dataDims['channels'], dataDims['input y dim'], dataDims['input x dim'])]))
+    while epoch <= cfg.max_epochs and not converged:
+        err_tr, time_tr = model_epoch_new(cfg, 
+                                          dataDims=dataDims, 
+                                          trainData=tr, 
+                                          model=model, 
+                                          optimizer=optimizer, 
+                                          update_gradients=True,
+                                          epoch=epoch,
+                                          tb_writer=writer,
+                                          iteration_override=0)  # train & compute loss
+        err_te, time_te = model_epoch_new(cfg, 
+                                          dataDims=dataDims, 
+                                          trainData=te, 
+                                          model=model, 
+                                          update_gradients=False,
+                                          epoch=epoch,
+                                          tb_writer=writer,
+                                          iteration_override=0)  # compute loss on test set
+        tr_err_hist.append(torch.mean(torch.stack(err_tr)))
+        te_err_hist.append(torch.mean(torch.stack(err_te)))
+        converged = auto_convergence(cfg, epoch, tr_err_hist, te_err_hist)
 
-    ## BEGIN TRAINING/GENERATION
-    if configs.max_epochs == 0:  # no training, just samples
-        sample, time_ge = generation(configs, dataDims, model)
-       # log_generation_stats(experiment, sample, agreements, output_analysis)
-
-    else:  # train it AND make samples!
-        epoch = 1
-        converged = 0
-        tr_err_hist = []
-        te_err_hist = []
-
-        #if configs.auto_training_batch:
-        ##    configs.training_batch_size, changed = get_training_batch_size(configs, model)  # confirm we can keep on at this batch size
-        #else:
-        #    changed = 0
-        #if changed == 1:  # if the training batch is different, we have to adjust our batch sizes and dataloaders
-        #    tr, te, _ = get_dataloaders(configs)
-        #    print('Training batch set to {}'.format(configs.training_batch_size))
-        #else:
-        tr, te, _ = get_dataloaders(configs)
-       # print(['tr and te',len(tr),len(te)])
-    #    print([configs.training_batch_size])
-        while (epoch <= (configs.max_epochs + 1)) & (converged == 0):  # over a certain number of epochs or until converged
-            err_tr, time_tr = model_epoch_new(configs, dataDims = dataDims, trainData = tr, model = model, optimizer = optimizer, update_gradients = True)  # train & compute loss
-            err_te, time_te = model_epoch_new(configs, dataDims = dataDims, trainData = te, model = model, update_gradients = False)  # compute loss on test set
-            tr_err_hist.append(torch.mean(torch.stack(err_tr)))
-            te_err_hist.append(torch.mean(torch.stack(err_te)))
-            print('epoch={}; nll_tr={:.5f}; nll_te={:.5f}; time_tr={:.1f}s; time_te={:.1f}s'.format(epoch, torch.mean(torch.stack(err_tr)), torch.mean(torch.stack(err_te)), time_tr, time_te))
-            converged = auto_convergence(configs, epoch, tr_err_hist, te_err_hist)
-            if int(epoch % 2 == 0):
-                with open('check' + str(epoch) + '.txt', 'w') as f:
-                   f.write(str(torch.mean(torch.stack(err_tr))) + " " + str(time_tr) + " " + str(torch.mean(torch.stack(err_te))))
+        if du.is_master_proc(num_gpus=local_world_size):
+            out_str = 'epoch={}; nll_tr={:.5f}; nll_te={:.5f}; time_tr={:.1f}s; time_te={:.1f}s'.format(epoch, tr_err_hist[-1], te_err_hist[-1], time_tr, time_te)
+            logger.info(out_str)
+            # Logging with TensorBoard
+            writer.add_scalar("Loss/train", tr_err_hist[-1], epoch-1)
+            writer.add_scalar("Loss/test", te_err_hist[-1], epoch-1)
+            # Save the model state
+            if epoch % cfg.ckpt_save_period == 0:
+                torch.save({
+                    'epoch': epoch,
+                    'model_state_dict': model.module.state_dict() if local_world_size > 1 else model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    "cfg": cfg.dump()}, os.path.join(cfg.OUTPUT_DIR, f'model-ep{epoch}.pt'))
+        epoch += 1
+    if du.is_master_proc(num_gpus=local_world_size):
+        torch.save({
+            'epoch': epoch-1,
+            'model_state_dict': model.module.state_dict() if local_world_size > 1 else model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            "cfg": cfg.dump()}, os.path.join(cfg.OUTPUT_DIR, f'model-last-ep{epoch-1}.pt'))
+        writer.close()
+        logger.info('Training finished!')
+    sample, time_ge = generation(cfg, dataDims, model)
+    # log_generation_stats(cfg, epoch, experiment, sample, agreements, output_analysis)
 
 
-            if configs.comet:
-                # get raw images
-                sample0 = next(iter(tr))
-                out = F.softmax(model(sample0.cuda().float()), dim=1).cpu().detach().numpy()
-                experiment.log_metric(name = 'train error', value = tr_err_hist[-1], epoch = epoch)
-                experiment.log_metric(name = 'test error', value = te_err_hist[-1], epoch = epoch)
-                experiment.log_image(np.rot90(torch.argmax(torch.Tensor(out[0,:,:,:]),dim=0)) - np.rot90(sample0[0,0].cpu().detach().numpy() * (out.shape[1] - 1)),
-                                     name = 'training error epoch_{}'.format(epoch), image_scale=4, image_colormap='hot')
 
-            #if epoch % configs.generation_period == 0:
-               # sample, time_ge= generation(configs, dataDims, model)
-               # log_generation_stats(configs, epoch, experiment, sample, agreements, output_analysis)
-
-            epoch += 1
-
-        # generate samples
-        save({
-            'epoch': epoch,
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict()},'./model-128.pt')
-        sample, time_ge = generation(configs, dataDims, model)
-       # log_generation_stats(configs, epoch, experiment, sample, agreements, output_analysis)
-    print('finished!')
+if __name__ == "__main__":
+    main()

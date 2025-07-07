@@ -102,7 +102,7 @@ class StackedConvolution(nn.Module):
         return d_out,v_out, h_out#, skip
 
 class GatedPixelCNN(nn.Module):  # Dense or residual, gated, blocked, dilated PixelCNN with batchnorm
-    def __init__(self, configs, dataDims):
+    def __init__(self, configs):
         super(GatedPixelCNN, self).__init__()
 
         ### initialize constants
@@ -115,7 +115,7 @@ class GatedPixelCNN(nn.Module):  # Dense or residual, gated, blocked, dilated Pi
         initial_convolution_size = configs.conv_size
         self.initial_pad = (initial_convolution_size - 1) // 2
         padding = 1 # DO NOT CHANGE THIS
-        channels = dataDims['channels']
+        channels = configs.condition_material_dim
         self.layers = configs.conv_layers
         self.filters = configs.conv_filters
         initial_filters = configs.conv_filters
@@ -127,7 +127,7 @@ class GatedPixelCNN(nn.Module):  # Dense or residual, gated, blocked, dilated Pi
         self.d_init_activation = Activation(self.act_func, initial_filters)
         self.h_init_activation = Activation(self.act_func, initial_filters)
         self.v_init_activation = Activation(self.act_func, initial_filters)
-        out_maps = dataDims['classes'] + 1
+        out_maps = configs.classes
 
 
 
