@@ -25,6 +25,7 @@ def main():
     # Set random seed from configs.
     np.random.seed(cfg.RNG_SEED)
     torch.manual_seed(cfg.RNG_SEED)
+    torch.backends.cudnn.benchmark = True
 
     model, optimizer = initialize_training(cfg)
     train_dataset, test_dataset, dataDims = get_dataset(cfg)
@@ -39,7 +40,7 @@ def main():
         logger.info("Train with config:")
         logger.info(cfg)
         num_trainable_params = sum(param.numel() for param in model.parameters() if param.requires_grad)
-        logger.info("Number of trainable params:", num_trainable_params)
+        logger.info(f"Number of trainable params: {num_trainable_params}")
         # input_analysis = analyse_inputs(cfg, dataDims, dataset=tr.dataset)
         # logger.info(f'Input Analysis:\n{input_analysis}')
         # logger.info('Imported and Analyzed Training Dataset {}'.format(cfg.training_dataset))
@@ -52,6 +53,8 @@ def main():
     tr_err_hist = []
     te_err_hist = []
 
+    scaler = torch.amp.GradScaler("cuda" if cfg.CUDA else "cpu") if cfg.ENABLE_AMP else None
+
     while epoch <= cfg.max_epochs and not converged:
         tr = data.DataLoader(train_dataset, batch_size=cfg.training_batch_size, shuffle=True, num_workers= 0, pin_memory=True)  # build dataloaders
         te = data.DataLoader(test_dataset, batch_size=cfg.training_batch_size, shuffle=False, num_workers= 0, pin_memory=True)
@@ -62,6 +65,7 @@ def main():
                                           optimizer=optimizer, 
                                           update_gradients=True,
                                           epoch=epoch,
+                                          scaler=scaler,
                                           tb_writer=writer,
                                           iteration_override=0)  # train & compute loss
         err_te, time_te = model_epoch_new(cfg, 
@@ -70,6 +74,7 @@ def main():
                                           model=model, 
                                           update_gradients=False,
                                           epoch=epoch,
+                                          scaler=scaler,
                                           tb_writer=writer,
                                           iteration_override=0)  # compute loss on test set
         tr_err_hist.append(torch.mean(torch.stack(err_tr)))

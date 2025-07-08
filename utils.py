@@ -1,7 +1,6 @@
 # metrics to determine the performance of our learning algorithm
 import os
 import time
-import pickle
 import sys
 import numpy as np
 from tqdm import tqdm
@@ -52,8 +51,8 @@ def initialize_training(cfg):
             output_device=cur_device,
             find_unused_parameters=True
         )
-    optimizer = optim.SGD(model.parameters(), lr=cfg.lr, momentum=0.9, nesterov=True)
-    # optimizer = optim.AdamW(model.parameters(), lr=configs.lr, amsgrad=True)
+    # optimizer = optim.SGD(model.parameters(), lr=cfg.lr, momentum=0.9, nesterov=True)
+    optimizer = optim.AdamW(model.parameters(), lr=cfg.lr, amsgrad=True, weight_decay=0.001)
     return model, optimizer
 
 
@@ -62,7 +61,7 @@ def compute_loss(output, target):
     return F.cross_entropy(output, target.squeeze(1).long())
 
 
-def model_epoch_new(configs, dataDims, trainData, model, optimizer=None, epoch=0, tb_writer=None, update_gradients=True, iteration_override=0):
+def model_epoch_new(configs, dataDims, trainData, model, optimizer=None, epoch=0, scaler=None, tb_writer=None, update_gradients=True, iteration_override=0):
     if configs.CUDA:
         cuda.synchronize()  # synchronize for timing purposes
     time_tr = time.time()
@@ -82,14 +81,24 @@ def model_epoch_new(configs, dataDims, trainData, model, optimizer=None, epoch=0
         # target = (input * dataDims['classes']) # [1, 1, 40, 40, 40], label: 1, 2, 3
         target = (input.clone() * dataDims['classes'] - 1) # [1, 1, 40, 40, 40], label: 0, 1, 2
 
-        output = model(input.float()) # reshape output from flat filters to channels * filters per channel
-        loss = compute_loss(output, target) # output: [1, 3, 40, 40, 40]
-        err.append(loss.data)  # record loss
-
         if update_gradients:
             optimizer.zero_grad()  # reset gradients from previous passes
+
+        if scaler is not None:
+            with torch.amp.autocast("cuda" if configs.CUDA else "cpu"):
+                output = model(input.float()) # reshape output from flat filters to channels * filters per channel
+                loss = compute_loss(output, target) # output: [1, 3, 40, 40, 40]
+
+                if update_gradients:
+                    scaler.scale(loss).backward()
+                    scaler.step(optimizer)
+                    scaler.update()
+        else:
+            output = model(input.float()) # reshape output from flat filters to channels * filters per channel
+            loss = compute_loss(output, target) # output: [1, 3, 40, 40, 40]
             loss.backward()  # back-propagation
             optimizer.step()  # update parameters
+        err.append(loss.data)  # record loss
 
         global_step = (epoch - 1) * len(trainData) + i
         if tb_writer is not None:

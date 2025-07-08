@@ -2,24 +2,33 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-import scipy.special as special
-from itertools import combinations
-import sys
+
+
+def initialize_weights(module):
+    if isinstance(module, torch.nn.Conv3d) or isinstance(module, torch.nn.Linear):
+        torch.nn.init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='relu')
+        if module.bias is not None:
+            torch.nn.init.zeros_(module.bias)
+    elif isinstance(module, torch.nn.BatchNorm3d):
+        module.weight.data.fill_(1.0)
+        module.bias.data.zero_()
 
 class MaskedConv3d_h(nn.Conv3d):
-    def __init__(self,mask_type, *args, **kwargs):
-        super(MaskedConv3d_h, self).__init__(*args, **kwargs)
-        assert mask_type in {'A', 'B'}  # mask A is for the first convolutional layer only, all deeper layers use mask B
-        _, _, kD, kH, kW = self.weight.size()  # get the size of the convolutional filter
-        self.register_buffer('mask', self.weight.data.clone())  # initialize mask
-        self.mask.fill_(1)  # start building the masks
-        #print([kD, kH, kW])
+    def __init__(self, mask_type, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        assert mask_type in {'A', 'B'}, "mask_type must be either 'A' or 'B'"
+        # mask A is for the first convolutional layer only, all deeper layers use mask B
+        mask = torch.ones_like(self.weight)
         if mask_type == 'A': # horizontal masking - mask only the central pixel (right-most in a horizontal convolution)
-          self.mask[:, :, :, :, -1] = 0  # block right-most pixel in 3D image
+            mask[:, :, :, :, -1] = 0  # Mask the last column (rightmost pixel) in 3D image
+        self.register_buffer('mask', mask)
 
-    def forward(self,x):
-        self.weight.data *= self.mask # apply mask to weight data
-        return super(MaskedConv3d_h, self).forward(x)
+    def forward(self, x):
+        masked_weight = self.weight * self.mask  # Masked convolution without modifying original weight
+        return nn.functional.conv3d(
+            x, masked_weight, self.bias, self.stride,
+            self.padding, self.dilation, self.groups
+        )
 
 
 def gated_activation(input):
@@ -162,6 +171,9 @@ class GatedPixelCNN(nn.Module):  # Dense or residual, gated, blocked, dilated Pi
         self.fc2 = nn.Conv3d(fc_filters, out_maps * channels, (1,1,1), bias=False) # gated activation cuts filters by 2
         self.fc_norm = nn.BatchNorm3d(fc_filters)
         self.fc_dropout = nn.Dropout(configs.fc_dropout_probability)
+        # Initialize parameters
+        self.apply(initialize_weights)
+
 
     def forward(self, input):
         # clean input

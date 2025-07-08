@@ -8,6 +8,7 @@ _C.comet = False
 _C.init_method = "env://"
 _C.CUDA = True if torch.cuda.is_available() else False
 _C.NUM_GPUS = 1
+_C.ENABLE_AMP = False
 
 # Data
 _C.training_dataset = "3d-water"
