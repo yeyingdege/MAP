@@ -102,14 +102,19 @@ def transform_data_3(sample):
     return newdata
 
 
-def get_dataloaders(configs):
-    dataset = build_dataset(configs)  # get data
+def get_dataset(cfg):
+    dataset = build_dataset(cfg)  # get data
     dataDims = dataset.dataDims
     print(['dataset',len(dataset)])
     train_size = int(0.8 * len(dataset))  # split data into training and test sets
     test_size = len(dataset) - train_size
     train_dataset, test_dataset = torch.utils.data.Subset(dataset, [range(train_size),range(train_size,test_size + train_size)])  # split it the same way every time
-    tr = data.DataLoader(train_dataset, batch_size=configs.training_batch_size, shuffle=True, num_workers= 0, pin_memory=True)  # build dataloaders
-    te = data.DataLoader(test_dataset, batch_size=configs.training_batch_size, shuffle=False, num_workers= 0, pin_memory=True)
-    print([type(tr),len(te)])
+    return train_dataset, test_dataset, dataDims
+
+
+def get_dataloaders(cfg):
+    train_dataset, test_dataset, dataDims = get_dataset(cfg)
+    tr = data.DataLoader(train_dataset, batch_size=cfg.training_batch_size, shuffle=True, num_workers= 0, pin_memory=True)  # build dataloaders
+    te = data.DataLoader(test_dataset, batch_size=cfg.training_batch_size, shuffle=False, num_workers= 0, pin_memory=True)
+    print(type(te),len(te))
     return tr, te, dataDims

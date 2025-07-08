@@ -90,7 +90,7 @@ def visualize_voxel_labels(points, num_classes=3, title="3D Grid Points Colored 
 
 
 def visualize_dataset(num_samples=5):
-    from utils import get_dataloaders
+    from dataset import get_dataloaders
     from config.config import _C as cfg
 
     tr, te, dataDims = get_dataloaders(cfg)
@@ -100,7 +100,7 @@ def visualize_dataset(num_samples=5):
 
 
 if __name__ == "__main__":
-    # points = np.load("samples/run_ep5_samples40.npy")  # Load your points data
-    # points = points.squeeze()
-    # visualize_voxel_labels(points, num_classes=3, title="water_voxel")
-    visualize_dataset()
+    points = np.load("samples/run_ep100_samples40.npy")  # Load your points data
+    points = points.squeeze()
+    visualize_voxel_labels(points, num_classes=3, title="water_voxel_ep6")
+    # visualize_dataset()

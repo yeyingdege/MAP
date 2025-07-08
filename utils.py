@@ -1,5 +1,4 @@
 # metrics to determine the performance of our learning algorithm
-from comet_ml import Experiment
 import os
 import time
 import pickle
@@ -7,26 +6,18 @@ import sys
 import numpy as np
 from tqdm import tqdm
 from scipy.fft import fftn, fftshift
-from scipy.ndimage import gaussian_filter
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 import torch.multiprocessing as mp
 from torch import optim, cuda
 from torch.utils import data
-from torch.nn.parallel import DistributedDataParallel as DDP
 from models import GatedPixelCNN
 from dataset import build_dataset
 import util.distributed as du
 # from accuracy_metrics import *
 # from Image_Processing_Utils import *
 
-
-
-def get_dir_name(model, training_data, filters, layers, dilation, filter_size, noise, den_var, dataset_size):
-    dir_name = "model=%d_dataset=%d_dataset_size=%d_filters=%d_layers=%d_dilation=%d_filter_size=%d_noise=%.1f_denvar=%.1f" % (model, training_data, dataset_size, filters, layers, dilation, filter_size, noise, den_var)  # directory where tensorboard logfiles will be saved
-
-    return dir_name
 
 
 def get_model(cfg):
@@ -71,69 +62,6 @@ def compute_loss(output, target):
     return F.cross_entropy(output, target.squeeze(1).long())
 
 
-def get_training_batch_size(configs, model):
-    finished = 0
-    training_batch_0 = 1 * configs.training_batch_size
-    #  test various batch sizes to see what we can store in memory
-    dataset = build_dataset(configs)
-    dataDims = dataset.dataDims
-    train_size = int(0.8 * len(dataset))  # split data into training and test sets
-    test_size = len(dataset) - train_size
-    train_dataset, test_dataset = torch.utils.data.Subset(dataset, [range(train_size),range(train_size,test_size + train_size)])  # split it the same way every time
-    optimizer = optim.SGD(model.parameters(),lr=1e-2, momentum=0.9, nesterov=True)#optim.AdamW(model.parameters(),amsgrad=True) #
-
-    while (configs.training_batch_size > 1) & (finished == 0):
-        try:
-            test_dataloader = data.DataLoader(test_dataset, batch_size=configs.training_batch_size, shuffle=False, num_workers=0, pin_memory=True)
-            model_epoch(configs, dataDims = dataDims, trainData = test_dataloader, model = model, optimizer = optimizer, update_gradients = True, iteration_override = 2)
-            finished = 1
-        except RuntimeError: # if we get an OOM, try again with smaller batch
-            configs.training_batch_size = int(np.ceil(configs.training_batch_size * 0.8)) - 1
-            print('Training batch sized reduced to {}'.format(configs.training_batch_size))
-
-    return max(int(configs.training_batch_size * 0.25),1), int(configs.training_batch_size != training_batch_0)
-
-
-def model_epoch(configs, dataDims = None, trainData = None, model=None, optimizer=None, update_gradients = True, iteration_override = 0):
-    if configs.CUDA:
-        cuda.synchronize()  # synchronize for timing purposes
-    time_tr = time.time()
-
-    err = []
-
-    if update_gradients:
-        model.train(True)
-    else:
-        model.eval()
-    print(['traindata',len(trainData)])
-    for i, input in enumerate(trainData):
-
-        if configs.CUDA:
-            input = input.cuda(non_blocking=True)
-
-        target = input * dataDims['classes']
-
-        output = model(input.float()) # reshape output from flat filters to channels * filters per channel
-        loss = compute_loss(output, target)
-
-        err.append(loss.data)  # record loss
-
-        if update_gradients:
-            optimizer.zero_grad()  # reset gradients from previous passes
-            loss.backward()  # back-propagation
-            optimizer.step()  # update parameters
-
-        if iteration_override != 0:
-            if i > iteration_override:
-                break
-
-    print(i)
-    if configs.CUDA:
-        cuda.synchronize()
-    time_tr = time.time() - time_tr
-
-    return err, time_tr
-
 def model_epoch_new(configs, dataDims, trainData, model, optimizer=None, epoch=0, tb_writer=None, update_gradients=True, iteration_override=0):
     if configs.CUDA:
         cuda.synchronize()  # synchronize for timing purposes
@@ -175,7 +103,7 @@ def model_epoch_new(configs, dataDims, trainData, model, optimizer=None, epoch=0
     return err, time_tr
 
 
-def auto_convergence(configs, epoch, tr_err_hist, te_err_hist):
+def auto_convergence(configs, epoch, tr_err_hist, te_err_hist, logger=None):
     # set convergence criteria
     # if the test error has increased on average for the last x epochs
     # or if the training error has decreased by less than 1% for the last x epochs
@@ -185,16 +113,16 @@ def auto_convergence(configs, epoch, tr_err_hist, te_err_hist):
     # configs.convergence_moving_average_window - the time over which we will average loss in order to determine convergence
     converged = 0
     if epoch > configs.convergence_moving_average_window:
-        print('hi')
         window = configs.convergence_moving_average_window
-        tr_mean, te_mean = [torch.mean(torch.stack(tr_err_hist[-configs.convergence_moving_average_window:])), torch.mean(torch.stack(te_err_hist[-configs.convergence_moving_average_window:]))]
-        print([tr_mean,tr_err_hist[-window],configs.convergence_margin,te_mean])
-        if (torch.abs((tr_mean - tr_err_hist[-window]) / tr_mean) < configs.convergence_margin) \
+        tr_mean, te_mean = [torch.mean(torch.stack(tr_err_hist[-window:])), torch.mean(torch.stack(te_err_hist[-window:]))]
+        if (torch.abs((tr_mean - tr_err_hist[-1]) / tr_mean) < configs.convergence_margin) \
                 or ((torch.abs(te_mean - tr_mean) / tr_mean) < configs.convergence_margin) \
                 or (epoch == configs.max_epochs)\
-                or (te_mean > te_err_hist[-window]):
+                or (te_mean < te_err_hist[-1]):
             converged = 1
-            print('Learning converged at epoch {}'.format(epoch - window))  # print a nice message  # consider also using an accuracy metric
+            if logger is not None:
+                logger.info('Learning converged at epoch {}'.format(epoch))
+                logger.info(tr_mean, tr_err_hist[-1], te_mean, te_err_hist[-1])
 
     return converged
 
@@ -318,52 +246,6 @@ def compute_accuracy(configs, dataDims, input_analysis, output_analysis):
     return agreements
 
 
-def save_ckpt(epoch, net, optimizer, dir_name):
-    torch.save({'epoch': epoch, 'model_state_dict': net.state_dict(), 'optimizer_state_dict': optimizer.state_dict()}, 'ckpts/' + dir_name[:])
-
-def load_all_pickles(path):
-    outputs = []
-    print('loading all .pkl files from',path)
-    files = [ f for f in listdir(path) if isfile(join(path,f)) ]
-    for f in files:
-        if f[-4:] in ('.pkl'):
-            name = f[:-4]+'_'+f[-3:]
-            print('loading', f, 'as', name)
-            with open(path + '/' + f, 'rb') as f:
-                outputs.append(pickle.load(f))
-
-    return outputs
-
-def get_size(obj, seen=None):
-    """Recursively finds size of objects"""
-    size = sys.getsizeof(obj)
-    if seen is None:
-        seen = set()
-    obj_id = id(obj)
-    if obj_id in seen:
-        return 0
-    # Important mark as seen *before* entering recursion to gracefully handle
-    # self-referential objects
-    seen.add(obj_id)
-    if isinstance(obj, dict):
-        size += sum([get_size(v, seen) for v in obj.values()])
-        size += sum([get_size(k, seen) for k in obj.keys()])
-    elif hasattr(obj, '__dict__'):
-        size += get_size(obj.__dict__, seen)
-    elif hasattr(obj, '__iter__') and not isinstance(obj, (str, bytes, bytearray)):
-        size += sum([get_size(i, seen) for i in obj])
-    return size
-
-def find_dir():
-    found = 0
-    ii = 0
-    while found == 0:
-        ii += 1
-        if not os.path.exists('logfiles/run_%d' % ii):
-            found = 1
-
-    return ii
-
 def rolling_mean(input, run):
     output = np.zeros(len(input))
     for i in range(len(output)):
@@ -379,6 +261,7 @@ def rolling_mean(input, run):
 def get_comet_experiment(configs):
     if configs.comet:
         # Create an experiment with your api key
+        from comet_ml import Experiment
         experiment = Experiment(
             api_key="WdZXLSYozVLDkUZWGfcLPj1pu",
             project_name="wled",
@@ -416,13 +299,6 @@ def log_generation_stats(configs, epoch, experiment, sample, agreements, output_
         for i in range(len(sample)):
             experiment.log_image(np.rot90(sample[i, 0]), name='epoch_{}_sample_{}'.format(epoch, i), image_scale=4, image_colormap='hot')
         experiment.log_metrics(agreements, epoch=epoch)
-
-def log_input_stats(configs, input_analysis, tb_writer=None):
-    if tb_writer is not None:
-        for i in range(len(input_analysis['training samples'])):
-            # experiment.log_image(np.rot90(input_analysis['training samples'][i]), name = 'training example {}'.format(i), image_scale=4, image_colormap='hot')
-            img_tensor = torch.Tensor(np.rot90(input_analysis['training samples'][i][0]))
-            tb_writer.add_image("train_in", img_tensor, i)
 
 
 def standardize(data):

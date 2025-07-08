@@ -1,11 +1,12 @@
 import os
 import argparse
-import torch
 import numpy as np
+import torch
+from torch.utils import data
 from torch.utils.tensorboard import SummaryWriter
 from config.config import _C as cfg
 import util.distributed as du
-from dataset import get_dataloaders
+from dataset import get_dataset
 from generation import generation
 from utils import initialize_training, model_epoch_new, auto_convergence, analyse_inputs, setup_logger
 
@@ -26,7 +27,7 @@ def main():
     torch.manual_seed(cfg.RNG_SEED)
 
     model, optimizer = initialize_training(cfg)
-    tr, te, dataDims = get_dataloaders(cfg)
+    train_dataset, test_dataset, dataDims = get_dataset(cfg)
 
     torch.cuda.empty_cache()
     local_world_size = min(torch.cuda.device_count(), cfg.NUM_GPUS)
@@ -44,6 +45,7 @@ def main():
         # logger.info('Imported and Analyzed Training Dataset {}'.format(cfg.training_dataset))
     else:
         writer = None
+        logger = None
 
     epoch = 1
     converged = 0
@@ -51,6 +53,8 @@ def main():
     te_err_hist = []
 
     while epoch <= cfg.max_epochs and not converged:
+        tr = data.DataLoader(train_dataset, batch_size=cfg.training_batch_size, shuffle=True, num_workers= 0, pin_memory=True)  # build dataloaders
+        te = data.DataLoader(test_dataset, batch_size=cfg.training_batch_size, shuffle=False, num_workers= 0, pin_memory=True)
         err_tr, time_tr = model_epoch_new(cfg, 
                                           dataDims=dataDims, 
                                           trainData=tr, 
@@ -70,7 +74,7 @@ def main():
                                           iteration_override=0)  # compute loss on test set
         tr_err_hist.append(torch.mean(torch.stack(err_tr)))
         te_err_hist.append(torch.mean(torch.stack(err_te)))
-        converged = auto_convergence(cfg, epoch, tr_err_hist, te_err_hist)
+        converged = auto_convergence(cfg, epoch, tr_err_hist, te_err_hist, logger)
 
         if du.is_master_proc(num_gpus=local_world_size):
             out_str = 'epoch={}; nll_tr={:.5f}; nll_te={:.5f}; time_tr={:.1f}s; time_te={:.1f}s'.format(epoch, tr_err_hist[-1], te_err_hist[-1], time_tr, time_te)

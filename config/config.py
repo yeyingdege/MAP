@@ -1,3 +1,4 @@
+import torch
 from yacs.config import CfgNode as CN
 
 
@@ -5,7 +6,7 @@ _C = CN()
 
 _C.comet = False
 _C.init_method = "env://"
-_C.CUDA = True
+_C.CUDA = True if torch.cuda.is_available() else False
 _C.NUM_GPUS = 1
 
 # Data
@@ -21,7 +22,7 @@ _C.max_epochs = 100 #500
 _C.ckpt_save_period = 10 # save model every n epochs
 _C.training_batch_size = 16
 _C.convergence_moving_average_window = 5 # not sure what value it should be
-_C.convergence_margin = 0.2
+_C.convergence_margin = 0.1
 
 # Model
 _C.model = "gated1"
