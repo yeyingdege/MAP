@@ -30,22 +30,18 @@ def main(local_rank=-1):
     np.random.seed(cfg.RNG_SEED)
     torch.manual_seed(cfg.RNG_SEED)
     torch.backends.cudnn.benchmark = True
+    torch.cuda.empty_cache()
+    local_world_size = min(torch.cuda.device_count(), cfg.NUM_GPUS)
 
     model, optimizer = initialize_training(cfg)
     train_dataset, test_dataset, dataDims = get_dataset(cfg)
-
-    torch.cuda.empty_cache()
-    local_world_size = min(torch.cuda.device_count(), cfg.NUM_GPUS)
     # distributed data parallelism
     if local_world_size > 1:
-        train_sampler = data.DistributedSampler(train_dataset, num_replicas=local_world_size, rank=local_rank)
-        tr = data.DataLoader(train_dataset,
-                             batch_size=cfg.training_batch_size,
-                             sampler=train_sampler,
-                             pin_memory=True)
+        train_sampler = data.DistributedSampler(train_dataset)
+        tr = data.DataLoader(train_dataset, batch_size=cfg.batch_size, sampler=train_sampler, pin_memory=True)
     else:
-        tr = data.DataLoader(train_dataset, batch_size=cfg.training_batch_size, shuffle=True, num_workers=0, pin_memory=True)
-    te = data.DataLoader(test_dataset, batch_size=cfg.training_batch_size, shuffle=False, num_workers=0, pin_memory=True)
+        tr = data.DataLoader(train_dataset, batch_size=cfg.batch_size, shuffle=True, num_workers=0, pin_memory=True)
+    te = data.DataLoader(test_dataset, batch_size=cfg.batch_size, shuffle=False, num_workers=0, pin_memory=True)
 
     os.makedirs(cfg.OUTPUT_DIR, exist_ok=True)
     if du.is_master_proc(num_gpus=local_world_size):
@@ -70,6 +66,8 @@ def main(local_rank=-1):
     scaler = torch.amp.GradScaler("cuda" if cfg.CUDA else "cpu") if cfg.ENABLE_AMP else None
 
     while epoch <= cfg.max_epochs and not converged:
+        if local_world_size > 1:
+            train_sampler.set_epoch(epoch - 1) # shuffle the training data at each epoch
         err_tr, time_tr = model_epoch_new(cfg, 
                                           dataDims=dataDims, 
                                           trainData=tr, 

@@ -114,7 +114,7 @@ def get_dataset(cfg):
 
 def get_dataloaders(cfg):
     train_dataset, test_dataset, dataDims = get_dataset(cfg)
-    tr = data.DataLoader(train_dataset, batch_size=cfg.training_batch_size, shuffle=True, num_workers= 0, pin_memory=True)  # build dataloaders
-    te = data.DataLoader(test_dataset, batch_size=cfg.training_batch_size, shuffle=False, num_workers= 0, pin_memory=True)
+    tr = data.DataLoader(train_dataset, batch_size=cfg.batch_size, shuffle=True, num_workers= 0, pin_memory=True)  # build dataloaders
+    te = data.DataLoader(test_dataset, batch_size=cfg.batch_size, shuffle=False, num_workers= 0, pin_memory=True)
     print(type(te),len(te))
     return tr, te, dataDims

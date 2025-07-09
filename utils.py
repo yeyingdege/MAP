@@ -123,8 +123,11 @@ def auto_convergence(configs, epoch, tr_err_hist, te_err_hist, logger=None):
     if epoch > configs.convergence_moving_average_window:
         window = configs.convergence_moving_average_window
         tr_mean, te_mean = [torch.mean(torch.stack(tr_err_hist[-window:])), torch.mean(torch.stack(te_err_hist[-window:]))]
+        # if (torch.abs((tr_mean - tr_err_hist[-1]) / tr_mean) < configs.convergence_margin) \
+        #         or ((torch.abs(te_mean - tr_mean) / tr_mean) < configs.convergence_margin) \
+        #         or (epoch == configs.max_epochs)\
+        #         or (te_mean < te_err_hist[-1]):
         if (torch.abs((tr_mean - tr_err_hist[-1]) / tr_mean) < configs.convergence_margin) \
-                or ((torch.abs(te_mean - tr_mean) / tr_mean) < configs.convergence_margin) \
                 or (epoch == configs.max_epochs)\
                 or (te_mean < te_err_hist[-1]):
             converged = 1

@@ -21,7 +21,7 @@ _C.RNG_SEED = 0
 _C.lr = 1e-2
 _C.max_epochs = 100 #500
 _C.ckpt_save_period = 10 # save model every n epochs
-_C.training_batch_size = 16
+_C.batch_size = 16
 _C.convergence_moving_average_window = 5 # not sure what value it should be
 _C.convergence_margin = 0.1
 
@@ -35,7 +35,7 @@ _C.fc_dropout_probability = 0.21
 
 # Generation
 _C.sample_generation_mode = "serial"
-_C.sample_outpaint_ratio = 1 # number of times to extrapolate
+_C.sample_outpaint_ratio = 2 # number of times to extrapolate
 _C.boundary_layers = 1
 _C.n_samples = 1 # total number of samples to generate
 _C.sample_batch_size = 1 # number of samples to generate at one time
