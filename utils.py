@@ -96,8 +96,9 @@ def model_epoch_new(configs, dataDims, trainData, model, optimizer=None, epoch=0
         else:
             output = model(input.float()) # reshape output from flat filters to channels * filters per channel
             loss = compute_loss(output, target) # output: [1, 3, 40, 40, 40]
-            loss.backward()  # back-propagation
-            optimizer.step()  # update parameters
+            if update_gradients:
+                loss.backward()  # back-propagation
+                optimizer.step()  # update parameters
         err.append(loss.data)  # record loss
 
         global_step = (epoch - 1) * len(trainData) + i
