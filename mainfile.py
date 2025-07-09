@@ -3,6 +3,7 @@ import argparse
 import numpy as np
 import torch
 from torch.utils import data
+import torch.multiprocessing.spawn
 from torch.utils.tensorboard import SummaryWriter
 from config.config import _C as cfg
 import util.distributed as du
@@ -11,7 +12,7 @@ from generation import generation
 from utils import initialize_training, model_epoch_new, auto_convergence, analyse_inputs, setup_logger
 
 
-def main():
+def main(local_rank=-1):
     parser = argparse.ArgumentParser(description="MAP Training")
     parser.add_argument(
         "--config-file",
@@ -22,6 +23,9 @@ def main():
     )
     args = parser.parse_args()
     cfg.merge_from_file(args.config_file)
+
+    # Set the local rank for distributed training
+    if local_rank != -1: os.environ['LOCAL_RANK'] = str(local_rank)
     # Set random seed from configs.
     np.random.seed(cfg.RNG_SEED)
     torch.manual_seed(cfg.RNG_SEED)
@@ -32,6 +36,16 @@ def main():
 
     torch.cuda.empty_cache()
     local_world_size = min(torch.cuda.device_count(), cfg.NUM_GPUS)
+    # distributed data parallelism
+    if local_world_size > 1:
+        train_sampler = data.DistributedSampler(train_dataset, num_replicas=local_world_size, rank=local_rank)
+        tr = data.DataLoader(train_dataset,
+                             batch_size=cfg.training_batch_size,
+                             sampler=train_sampler,
+                             pin_memory=True)
+    else:
+        tr = data.DataLoader(train_dataset, batch_size=cfg.training_batch_size, shuffle=True, num_workers=0, pin_memory=True)
+    te = data.DataLoader(test_dataset, batch_size=cfg.training_batch_size, shuffle=False, num_workers=0, pin_memory=True)
 
     os.makedirs(cfg.OUTPUT_DIR, exist_ok=True)
     if du.is_master_proc(num_gpus=local_world_size):
@@ -56,8 +70,6 @@ def main():
     scaler = torch.amp.GradScaler("cuda" if cfg.CUDA else "cpu") if cfg.ENABLE_AMP else None
 
     while epoch <= cfg.max_epochs and not converged:
-        tr = data.DataLoader(train_dataset, batch_size=cfg.training_batch_size, shuffle=True, num_workers= 0, pin_memory=True)  # build dataloaders
-        te = data.DataLoader(test_dataset, batch_size=cfg.training_batch_size, shuffle=False, num_workers= 0, pin_memory=True)
         err_tr, time_tr = model_epoch_new(cfg, 
                                           dataDims=dataDims, 
                                           trainData=tr, 
@@ -103,10 +115,15 @@ def main():
             "cfg": cfg}, os.path.join(cfg.OUTPUT_DIR, f'model-last-ep{epoch-1}.pt'))
         writer.close()
         logger.info('Training finished!')
-    sample, time_ge = generation(cfg, dataDims, model)
-    # log_generation_stats(cfg, epoch, experiment, sample, agreements, output_analysis)
+        sample, time_ge = generation(cfg, dataDims, model)
+        # log_generation_stats(cfg, epoch, experiment, sample, agreements, output_analysis)
 
 
 
 if __name__ == "__main__":
-    main()
+    ngpus = min(torch.cuda.device_count(), cfg.NUM_GPUS)
+    if ngpus > 1:
+        print(f"Starting distributed training with {ngpus} GPUs...")
+        torch.multiprocessing.spawn(main, args=(), nprocs=ngpus, join=True)
+    else:
+        main()

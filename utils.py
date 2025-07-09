@@ -28,27 +28,25 @@ def get_model(cfg):
 def initialize_training(cfg):
     model = get_model(cfg)
     if cfg.CUDA:
-        os.environ['MASTER_ADDR'] = 'localhost'
-        os.environ['MASTER_PORT'] = '12355'
         local_world_size = min(torch.cuda.device_count(), cfg.NUM_GPUS)
         # Determine the GPU used by the current process
-        cur_device = torch.cuda.current_device()
+        local_rank = int(os.environ.get('LOCAL_RANK', '0'))
+        print(f"world size: {local_world_size}, rank: {local_rank}")
         du.init_process_group(
-            cur_device,
+            local_rank,
             local_world_size,
             shard_id=0,
             num_shards=1,
             init_method=cfg.init_method
         )
         # Transfer the model to the current GPU device
-        model = model.cuda(device=cur_device)
+        model = model.cuda()
     # Use multi-process data parallel model in the multi-gpu setting
-    if cfg.NUM_GPUS > 1:
+    if cfg.NUM_GPUS > 1 and local_world_size > 1:
         # Make model replica operate on the current device
         model = torch.nn.parallel.DistributedDataParallel(
             module=model,
-            device_ids=[cur_device],
-            output_device=cur_device,
+            device_ids=[local_rank],
             find_unused_parameters=True
         )
     # optimizer = optim.SGD(model.parameters(), lr=cfg.lr, momentum=0.9, nesterov=True)
