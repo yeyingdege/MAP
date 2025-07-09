@@ -93,14 +93,14 @@ def main():
                     'epoch': epoch,
                     'model_state_dict': model.module.state_dict() if local_world_size > 1 else model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
-                    "cfg": cfg.dump()}, os.path.join(cfg.OUTPUT_DIR, f'model-ep{epoch}.pt'))
+                    "cfg": cfg}, os.path.join(cfg.OUTPUT_DIR, f'model-ep{epoch}.pt'))
         epoch += 1
     if du.is_master_proc(num_gpus=local_world_size):
         torch.save({
             'epoch': epoch-1,
             'model_state_dict': model.module.state_dict() if local_world_size > 1 else model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
-            "cfg": cfg.dump()}, os.path.join(cfg.OUTPUT_DIR, f'model-last-ep{epoch-1}.pt'))
+            "cfg": cfg}, os.path.join(cfg.OUTPUT_DIR, f'model-last-ep{epoch-1}.pt'))
         writer.close()
         logger.info('Training finished!')
     sample, time_ge = generation(cfg, dataDims, model)

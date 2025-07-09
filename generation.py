@@ -130,19 +130,17 @@ def generate_samples_gated(configs, dataDims, model):
     return sample, time_ge
 
 
-def generation(configs, dataDims, model):
+def generation(cfg, dataDims, model, epoch=-1):
     #err_te, time_te = test_net(model, te)  # clean run net
 
-    sample, time_ge = generate_samples_gated(configs, dataDims, model)  # generate samples
-    os.makedirs('samples', exist_ok=True)
-    np.save('samples/run_ep{}_samples40'.format(configs.max_epochs), sample)
+    sample, time_ge = generate_samples_gated(cfg, dataDims, model)  # generate samples
+    np.save(os.path.join(cfg.OUTPUT_DIR, 'run_ep{}_samples_x{}'.format(epoch, cfg.sample_outpaint_ratio)), sample)
 
     if len(sample) != 0:
         print('Generated samples')
 
         #output_analysis = analyse_samples(sample)
-
-        #agreements = compute_accuracy(configs, dataDims, input_analysis, output_analysis)
+        #agreements = compute_accuracy(cfg, dataDims, input_analysis, output_analysis)
         total_agreement = 0
        # for i, j, in enumerate(agreements.values()):
         #    if np.isnan(j) != 1: # kill NaNs
@@ -159,8 +157,9 @@ def generation(configs, dataDims, model):
 
 
 def load_model_ckpt(ckpt_path: str):
-    model = get_model(cfg)
     ckpt_ = torch.load(ckpt_path)
+    cfg = ckpt_["cfg"]
+    model = get_model(cfg)
     if 'module' in list(ckpt_["model_state_dict"].keys())[0]:
         from collections import OrderedDict
         new_state_dict = OrderedDict()
@@ -172,7 +171,7 @@ def load_model_ckpt(ckpt_path: str):
         model.load_state_dict(ckpt_["model_state_dict"])
     model= model.to("cuda" if cfg.CUDA else "cpu")
     model.eval()
-    return model
+    return model, ckpt_["epoch"]
 
 
 def test_ckpt_generation(ckpt_path):
@@ -182,11 +181,11 @@ def test_ckpt_generation(ckpt_path):
     else:
         raise FileNotFoundError
     # load model and ckpt
-    model = load_model_ckpt(ckpt_path)
-    generation(cfg, dataDims, model)
+    model, epoch = load_model_ckpt(ckpt_path)
+    generation(cfg, dataDims, model, epoch)
     print("done")
 
 
 if __name__ == "__main__":
-    test_ckpt_generation(ckpt_path="checkpoints/model-ep6.pt")
+    test_ckpt_generation(ckpt_path="checkpoints/water-adam-lr1e-3/model-last-ep6.pt")
     # print_shape_stats(cfg)
