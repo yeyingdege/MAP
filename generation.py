@@ -134,8 +134,7 @@ def generation(configs, dataDims, model):
     #err_te, time_te = test_net(model, te)  # clean run net
 
     sample, time_ge = generate_samples_gated(configs, dataDims, model)  # generate samples
-    print(sample[0])
-
+    os.makedirs('samples', exist_ok=True)
     np.save('samples/run_ep{}_samples40'.format(configs.max_epochs), sample)
 
     if len(sample) != 0:
