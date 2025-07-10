@@ -119,7 +119,7 @@ def main(local_rank=-1):
     if du.is_master_proc(num_gpus=local_world_size):
         writer.close()
         logger.info('Training finished!')
-        sample, time_ge = generation(cfg, dataDims, model)
+        sample, time_ge = generation(cfg, dataDims, model, epoch-1)
         # log_generation_stats(cfg, epoch, experiment, sample, agreements, output_analysis)
 
 
@@ -132,4 +132,5 @@ if __name__ == "__main__":
     else:
         os.environ["MASTER_ADDR"] = "localhost"
         os.environ["MASTER_PORT"] = "12345"
+        print("Starting training with 1 GPU...")
         main()
