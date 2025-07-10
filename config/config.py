@@ -7,7 +7,7 @@ _C = CN()
 _C.comet = False
 _C.init_method = "env://"
 _C.CUDA = True if torch.cuda.is_available() else False
-_C.NUM_GPUS = 1
+_C.NUM_GPUS = 2
 _C.ENABLE_AMP = False
 
 # Data
@@ -18,12 +18,12 @@ _C.condition_material_dim = 1
 
 # Train
 _C.RNG_SEED = 0
-_C.lr = 1e-2
+_C.lr = 1e-3
 _C.max_epochs = 100 #500
 _C.ckpt_save_period = 10 # save model every n epochs
-_C.batch_size = 16
-_C.convergence_moving_average_window = 5 # not sure what value it should be
-_C.convergence_margin = 0.1
+_C.batch_size = 32
+_C.convergence_moving_average_window = 10
+_C.convergence_margin = 0.01
 
 # Model
 _C.model = "gated1"
@@ -41,4 +41,4 @@ _C.n_samples = 1 # total number of samples to generate
 _C.sample_batch_size = 1 # number of samples to generate at one time
 
 # Output
-_C.OUTPUT_DIR = "checkpoints/water-default"
+_C.OUTPUT_DIR = "checkpoints/water-lr1e-3-bs32-dist"

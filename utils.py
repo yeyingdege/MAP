@@ -133,7 +133,7 @@ def auto_convergence(configs, epoch, tr_err_hist, te_err_hist, logger=None):
             converged = 1
             if logger is not None:
                 logger.info('Learning converged at epoch {}'.format(epoch))
-                logger.info(tr_mean, tr_err_hist[-1], te_mean, te_err_hist[-1])
+                logger.info(tr_mean.item(), tr_err_hist[-1].item(), te_mean.item(), te_err_hist[-1].item())
 
     return converged
 
