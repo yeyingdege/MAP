@@ -18,6 +18,7 @@ _C.condition_material_dim = 1
 
 # Train
 _C.RNG_SEED = 0
+_C.AUTO_RESUME = True
 _C.lr = 1e-3
 _C.max_epochs = 100 #500
 _C.ckpt_save_period = 10 # save model every n epochs
@@ -41,4 +42,4 @@ _C.n_samples = 1 # total number of samples to generate
 _C.sample_batch_size = 1 # number of samples to generate at one time
 
 # Output
-_C.OUTPUT_DIR = "checkpoints/water-lr1e-3-bs32-dist"
+_C.OUTPUT_DIR = "checkpoints/water-adam-lr1e-3-bs32-dist"

@@ -7,6 +7,7 @@ import torch.multiprocessing.spawn
 from torch.utils.tensorboard import SummaryWriter
 from config.config import _C as cfg
 import util.distributed as du
+import util.checkpoint as cu
 from dataset import get_dataset
 from generation import generation
 from utils import initialize_training, model_epoch_new, auto_convergence, analyse_inputs, setup_logger
@@ -34,6 +35,7 @@ def main(local_rank=-1):
     local_world_size = min(torch.cuda.device_count(), cfg.NUM_GPUS)
 
     model, optimizer = initialize_training(cfg)
+    scaler = torch.amp.GradScaler("cuda" if cfg.CUDA else "cpu") if cfg.ENABLE_AMP else None
     train_dataset, test_dataset, dataDims = get_dataset(cfg)
     # distributed data parallelism
     if local_world_size > 1:
@@ -63,7 +65,18 @@ def main(local_rank=-1):
     tr_err_hist = []
     te_err_hist = []
 
-    scaler = torch.amp.GradScaler("cuda" if cfg.CUDA else "cpu") if cfg.ENABLE_AMP else None
+    # Load a checkpoint to resume training if applicable.
+    if cfg.AUTO_RESUME and cu.has_checkpoint(cfg.OUTPUT_DIR):
+        logger.info("Load from last checkpoint.")
+        last_checkpoint = cu.get_last_checkpoint(cfg.OUTPUT_DIR)
+        if last_checkpoint is not None:
+            checkpoint_epoch = cu.load_checkpoint(
+                last_checkpoint,
+                model,
+                optimizer,
+                scaler if cfg.ENABLE_AMP else None,
+            )
+            epoch = checkpoint_epoch + 1
 
     while epoch <= cfg.max_epochs and not converged:
         if local_world_size > 1:
@@ -97,20 +110,13 @@ def main(local_rank=-1):
             # Logging with TensorBoard
             writer.add_scalar("Loss/train", tr_err_hist[-1], epoch-1)
             writer.add_scalar("Loss/test", te_err_hist[-1], epoch-1)
-            # Save the model state
-            if epoch % cfg.ckpt_save_period == 0:
-                torch.save({
-                    'epoch': epoch,
-                    'model_state_dict': model.module.state_dict() if local_world_size > 1 else model.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    "cfg": cfg}, os.path.join(cfg.OUTPUT_DIR, f'model-ep{epoch}.pt'))
+        # Save the model state
+        if epoch % cfg.ckpt_save_period == 0:
+            cu.save_checkpoint(model, optimizer, epoch, cfg, scaler)
         epoch += 1
+
+    cu.save_checkpoint(model, optimizer, epoch-1, cfg, scaler)
     if du.is_master_proc(num_gpus=local_world_size):
-        torch.save({
-            'epoch': epoch-1,
-            'model_state_dict': model.module.state_dict() if local_world_size > 1 else model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            "cfg": cfg}, os.path.join(cfg.OUTPUT_DIR, f'model-last-ep{epoch-1}.pt'))
         writer.close()
         logger.info('Training finished!')
         sample, time_ge = generation(cfg, dataDims, model)
@@ -124,4 +130,6 @@ if __name__ == "__main__":
         print(f"Starting distributed training with {ngpus} GPUs...")
         torch.multiprocessing.spawn(main, args=(), nprocs=ngpus, join=True)
     else:
+        os.environ["MASTER_ADDR"] = "localhost"
+        os.environ["MASTER_PORT"] = "12345"
         main()

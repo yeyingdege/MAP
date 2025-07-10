@@ -7,6 +7,7 @@ import torch
 import torch.nn.functional as F
 from config.config import _C as cfg
 from utils import get_model
+import util.checkpoint as cu
 
 
 
@@ -156,24 +157,6 @@ def generation(cfg, dataDims, model, epoch=-1):
         return 0, 0, 0, 0
 
 
-def load_model_ckpt(ckpt_path: str):
-    ckpt_ = torch.load(ckpt_path)
-    cfg = ckpt_["cfg"]
-    model = get_model(cfg)
-    if 'module' in list(ckpt_["model_state_dict"].keys())[0]:
-        from collections import OrderedDict
-        new_state_dict = OrderedDict()
-        for k, v in ckpt_["model_state_dict"].items():
-            name = k[7:] # remove 'module.' of dataparallel
-            new_state_dict[name]=v
-        model.load_state_dict(new_state_dict)
-    else:
-        model.load_state_dict(ckpt_["model_state_dict"])
-    model= model.to("cuda" if cfg.CUDA else "cpu")
-    model.eval()
-    return model, ckpt_["epoch"]
-
-
 def test_ckpt_generation(ckpt_path):
     dataDims_file = "datadims.pkl"
     if os.path.exists(dataDims_file):
@@ -181,7 +164,8 @@ def test_ckpt_generation(ckpt_path):
     else:
         raise FileNotFoundError
     # load model and ckpt
-    model, epoch = load_model_ckpt(ckpt_path)
+    model = get_model(cfg)
+    epoch = cu.load_checkpoint(ckpt_path, model)
     generation(cfg, dataDims, model, epoch)
     print("done")
 
