@@ -67,7 +67,8 @@ def main(local_rank=-1):
 
     # Load a checkpoint to resume training if applicable.
     if cfg.AUTO_RESUME and cu.has_checkpoint(cfg.OUTPUT_DIR):
-        logger.info("Load from last checkpoint.")
+        if du.is_master_proc(num_gpus=local_world_size):
+            logger.info("Load from last checkpoint.")
         last_checkpoint = cu.get_last_checkpoint(cfg.OUTPUT_DIR)
         if last_checkpoint is not None:
             checkpoint_epoch = cu.load_checkpoint(
@@ -110,13 +111,14 @@ def main(local_rank=-1):
             # Logging with TensorBoard
             writer.add_scalar("Loss/train", tr_err_hist[-1], epoch-1)
             writer.add_scalar("Loss/test", te_err_hist[-1], epoch-1)
-        # Save the model state
-        if epoch % cfg.ckpt_save_period == 0:
-            cu.save_checkpoint(model, optimizer, epoch, cfg, scaler)
+            # Save checkpint from the main process
+            if epoch % cfg.ckpt_save_period == 0:
+                cu.save_checkpoint(model, optimizer, epoch, cfg, scaler)
         epoch += 1
 
-    cu.save_checkpoint(model, optimizer, epoch-1, cfg, scaler)
     if du.is_master_proc(num_gpus=local_world_size):
+        # Save checkpint from the main process
+        cu.save_checkpoint(model, optimizer, epoch-1, cfg, scaler)
         writer.close()
         logger.info('Training finished!')
         sample, time_ge = generation(cfg, dataDims, model, epoch-1)
