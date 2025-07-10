@@ -1,6 +1,7 @@
 import os
 import torch
 from collections import OrderedDict
+import util.distributed as du
 
 
 def get_checkpoint_path(directory):
@@ -27,18 +28,24 @@ def get_last_checkpoint(directory):
         return name
 
 
-def load_checkpoint(ckpt_path: str, model: object, optimizer=None, scaler=None):
-    ckpt_ = torch.load(ckpt_path)
+def load_checkpoint(ckpt_path: str, model: object, optimizer=None, scaler=None, is_distributed=False):
+    ckpt_ = torch.load(ckpt_path, weights_only=False)
     cfg = ckpt_["cfg"]
-    if 'module' in list(ckpt_["model_state_dict"].keys())[0]:
+    if not is_distributed and 'module' in list(ckpt_["model_state_dict"].keys())[0]:
         new_state_dict = OrderedDict()
         for k, v in ckpt_["model_state_dict"].items():
             name = k[7:] # remove 'module.' of dataparallel
             new_state_dict[name]=v
         model.load_state_dict(new_state_dict)
+    elif is_distributed and 'module.' not in list(ckpt_["model_state_dict"].keys())[0]:
+        new_state_dict = OrderedDict()
+        for k, v in ckpt_["model_state_dict"].items():
+            name = 'module.' + k # add 'module.'
+            new_state_dict[name]=v
+        model.load_state_dict(new_state_dict)
     else:
         model.load_state_dict(ckpt_["model_state_dict"])
-    model= model.to("cuda" if cfg.CUDA else "cpu")
+    # model= model.to("cuda" if cfg.CUDA else "cpu")
     if optimizer is not None:
         optimizer.load_state_dict(ckpt_["optimizer_state_dict"])
     if scaler is not None and "scaler_state" in ckpt_:
@@ -47,6 +54,8 @@ def load_checkpoint(ckpt_path: str, model: object, optimizer=None, scaler=None):
 
 
 def save_checkpoint(model, optimizer, epoch, cfg, scaler=None):
+    if not du.is_master_proc(num_gpus=cfg.NUM_GPUS):
+        return
     checkpoint = {
         'model_state_dict': model.module.state_dict() if cfg.NUM_GPUS > 1 else model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),

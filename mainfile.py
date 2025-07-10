@@ -76,6 +76,7 @@ def main(local_rank=-1):
                 model,
                 optimizer,
                 scaler if cfg.ENABLE_AMP else None,
+                is_distributed=True if local_world_size > 1 else False
             )
             epoch = checkpoint_epoch + 1
 
