@@ -90,12 +90,13 @@ def visualize_voxel_labels(points, num_classes=3, title="3D Grid Points Colored 
 
 
 def visualize_dataset(num_samples=5):
-    from dataset import get_dataloaders
+    from dataset import build_dataset
     from config.config import _C as cfg
 
-    tr, te, dataDims = get_dataloaders(cfg)
+    te = build_dataset(cfg, split='test')
+    dataDims = te.dataDims
     for i in range(num_samples):
-        visualize_voxel_labels(tr.dataset[i].squeeze()*3-1, num_classes=3, title=f"train_voxel_{i}")
+        visualize_voxel_labels(te[i].squeeze()*dataDims['classes']-1, num_classes=dataDims['classes'], title=f"train_voxel_{i}")
 
 
 

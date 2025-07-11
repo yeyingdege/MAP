@@ -59,7 +59,8 @@ def compute_loss(output, target):
     return F.cross_entropy(output, target.squeeze(1).long())
 
 
-def model_epoch_new(configs, dataDims, trainData, model, optimizer=None, epoch=0, scaler=None, tb_writer=None, update_gradients=True, iteration_override=0):
+def model_epoch_new(configs, dataDims, trainData, model, optimizer=None, epoch=0, scaler=None, 
+                    tb_writer=None, update_gradients=True, iteration_override=0, logger=None):
     if configs.CUDA:
         cuda.synchronize()  # synchronize for timing purposes
     time_tr = time.time()
@@ -71,28 +72,31 @@ def model_epoch_new(configs, dataDims, trainData, model, optimizer=None, epoch=0
     else:
         model.eval()
         mode = 'test'
-    print(mode, len(trainData))
+    if logger:
+        logger.info(f'[rank:{du.get_rank()}] {mode}, {len(trainData)}')
 
     for i, input in enumerate(tqdm(trainData)):
+        if logger and i==0:
+            logger.info(f"[rank:{du.get_rank()}] before loading the first train sample {input.shape}")
         if configs.CUDA:
             input = input.cuda(non_blocking=True)
         # target = (input * dataDims['classes']) # [1, 1, 40, 40, 40], label: 1, 2, 3
         target = (input.clone() * dataDims['classes'] - 1) # [1, 1, 40, 40, 40], label: 0, 1, 2
 
         if update_gradients:
-            optimizer.zero_grad()  # reset gradients from previous passes
+            optimizer.zero_grad()
 
         if scaler is not None:
             with torch.amp.autocast("cuda" if configs.CUDA else "cpu"):
-                output = model(input.float()) # reshape output from flat filters to channels * filters per channel
-                loss = compute_loss(output, target) # output: [1, 3, 40, 40, 40]
+                output = model(input.float())
+                loss = compute_loss(output, target)
 
                 if update_gradients:
                     scaler.scale(loss).backward()
                     scaler.step(optimizer)
                     scaler.update()
         else:
-            output = model(input.float()) # reshape output from flat filters to channels * filters per channel
+            output = model(input.float())
             loss = compute_loss(output, target) # output: [1, 3, 40, 40, 40]
             if update_gradients:
                 loss.backward()  # back-propagation
@@ -133,7 +137,7 @@ def auto_convergence(configs, epoch, tr_err_hist, te_err_hist, logger=None):
             converged = 1
             if logger is not None:
                 logger.info('Learning converged at epoch {}'.format(epoch))
-                logger.info(tr_mean.item(), tr_err_hist[-1].item(), te_mean.item(), te_err_hist[-1].item())
+                logger.info("{:05f},{:05f},{:05f},{:05f}".format(tr_mean.item(), tr_err_hist[-1].item(), te_mean.item(), te_err_hist[-1].item()))
 
     return converged
 

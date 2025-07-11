@@ -37,13 +37,6 @@ def main(local_rank=-1):
     model, optimizer = initialize_training(cfg)
     scaler = torch.amp.GradScaler("cuda" if cfg.CUDA else "cpu") if cfg.ENABLE_AMP else None
     train_dataset, test_dataset, dataDims = get_dataset(cfg)
-    # distributed data parallelism
-    if local_world_size > 1:
-        train_sampler = data.DistributedSampler(train_dataset)
-        tr = data.DataLoader(train_dataset, batch_size=cfg.batch_size, sampler=train_sampler, pin_memory=True)
-    else:
-        tr = data.DataLoader(train_dataset, batch_size=cfg.batch_size, shuffle=True, num_workers=0, pin_memory=True)
-    te = data.DataLoader(test_dataset, batch_size=cfg.batch_size, shuffle=False, num_workers=0, pin_memory=True)
 
     os.makedirs(cfg.OUTPUT_DIR, exist_ok=True)
     if du.is_master_proc(num_gpus=local_world_size):
@@ -67,9 +60,9 @@ def main(local_rank=-1):
 
     # Load a checkpoint to resume training if applicable.
     if cfg.AUTO_RESUME and cu.has_checkpoint(cfg.OUTPUT_DIR):
-        if du.is_master_proc(num_gpus=local_world_size):
-            logger.info("Load from last checkpoint.")
         last_checkpoint = cu.get_last_checkpoint(cfg.OUTPUT_DIR)
+        if du.is_master_proc(num_gpus=local_world_size):
+            logger.info(f"Load from last checkpoint: {last_checkpoint}.")
         if last_checkpoint is not None:
             checkpoint_epoch = cu.load_checkpoint(
                 last_checkpoint,
@@ -79,6 +72,16 @@ def main(local_rank=-1):
                 is_distributed=True if local_world_size > 1 else False
             )
             epoch = checkpoint_epoch + 1
+
+    du.synchronize()
+
+    # distributed data parallelism
+    if local_world_size > 1:
+        train_sampler = data.DistributedSampler(train_dataset, drop_last=True)
+        tr = data.DataLoader(train_dataset, batch_size=cfg.batch_size, sampler=train_sampler, num_workers=2, pin_memory=True, drop_last=True)
+    else:
+        tr = data.DataLoader(train_dataset, batch_size=cfg.batch_size, shuffle=True, num_workers=0, pin_memory=True)
+    te = data.DataLoader(test_dataset, batch_size=cfg.batch_size, shuffle=False, num_workers=0, pin_memory=True)
 
     while epoch <= cfg.max_epochs and not converged:
         if local_world_size > 1:
@@ -92,7 +95,8 @@ def main(local_rank=-1):
                                           epoch=epoch,
                                           scaler=scaler,
                                           tb_writer=writer,
-                                          iteration_override=0)  # train & compute loss
+                                          iteration_override=0,
+                                          logger=logger)  # train & compute loss
         err_te, time_te = model_epoch_new(cfg, 
                                           dataDims=dataDims, 
                                           trainData=te, 
@@ -101,7 +105,8 @@ def main(local_rank=-1):
                                           epoch=epoch,
                                           scaler=scaler,
                                           tb_writer=writer,
-                                          iteration_override=0)  # compute loss on test set
+                                          iteration_override=0,
+                                          logger=logger)  # compute loss on test set
         tr_err_hist.append(torch.mean(torch.stack(err_tr)))
         te_err_hist.append(torch.mean(torch.stack(err_te)))
         converged = auto_convergence(cfg, epoch, tr_err_hist, te_err_hist, logger)

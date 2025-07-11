@@ -12,6 +12,7 @@ _C.ENABLE_AMP = False
 
 # Data
 _C.training_dataset = "3d-water"
+_C.CACHE_FILE = "training_samples/cache_water.npy"
 _C.dataset_seed = 0
 _C.classes = 3 # the water dataset has 3 classes: empty, O, H
 _C.condition_material_dim = 1
@@ -42,4 +43,4 @@ _C.n_samples = 1 # total number of samples to generate
 _C.sample_batch_size = 1 # number of samples to generate at one time
 
 # Output
-_C.OUTPUT_DIR = "checkpoints/water-adam-lr1e-3-bs32-dist"
+_C.OUTPUT_DIR = "checkpoints/debug"

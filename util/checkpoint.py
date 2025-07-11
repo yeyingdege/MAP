@@ -24,7 +24,6 @@ def get_last_checkpoint(directory):
         return None
     else:
         name = sorted(names)[-1]
-        print(f"Last checkpoint path: {name}")
         return name
 
 

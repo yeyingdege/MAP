@@ -1,4 +1,4 @@
-import pickle
+import os
 import numpy as np
 import torch
 from torch.utils import data
@@ -6,34 +6,18 @@ from torch.utils.data import Dataset
 
 
 class build_dataset(Dataset):
-    def __init__(self, configs):
-        np.random.seed(configs.dataset_seed)
-        if configs.training_dataset == '3d-idealgas':
-            self.samples = np.load('data/hard_sphere_gas_1000.npy', allow_pickle=True)
-        elif configs.training_dataset == '3d-water':
-            self.samples = np.load('data/water_648atoms/water.npy', allow_pickle=True) # array(1000, 648, 3)
-            self.samples_identity = np.load('data/water_648atoms/water_identity.npy', allow_pickle=True) # array(1000, 648)
-        elif configs.training_dataset == 'sb2s3':
-            self.samples = np.load('data/sb2s3_3000K_480atoms_5000frames/3000K_positions.npy', allow_pickle=True)
-            self.samples_identity = np.load('data/sb2s3_3000K_480atoms_5000frames/3000K_element_symbols.npy', allow_pickle=True)
+    def __init__(self, configs, split='train', use_cache=True):
+        self.split = split
+        self.cfg = configs
+        
+        if use_cache and os.path.exists(self.cfg.CACHE_FILE):
+            self.samples = np.load(self.cfg.CACHE_FILE, allow_pickle=True)
+        else:
+            self.samples = self.process_raw_data()
 
-        self.samples = transform_data_2(self.samples,self.samples_identity)
-
-        self.samples = np.expand_dims(self.samples, axis=1) # (1000, 80, 80, 80)
         self.num_conditioning_variables = self.samples.shape[1] - 1
         assert self.samples.ndim == 5
 
-        ##### Data Augmentation
-        self.samples=np.concatenate((self.samples[:,:,0:40,0:40,0:40],self.samples[:,:,40:,40:,40:],self.samples[:,:,40:,0:40,0:40],self.samples[:,:,0:40,40:,0:40],self.samples[:,:,0:40,0:40,40:],self.samples[:,:,0:40,40:,40:],self.samples[:,:,40:,0:40,40:],self.samples[:,:,40:,40:,0:40]))
-        rot=np.rot90(self.samples.copy(),k=1,axes=(2,3)) # (8000, 1, 40, 40, 40)
-        rot2=np.rot90(self.samples.copy(),k=2,axes=(2,3))
-        rot3=np.rot90(self.samples.copy(),k=1,axes=(2,4))
-        rot4=np.rot90(self.samples.copy(),k=2,axes=(2,4))
-        rot5=np.rot90(self.samples.copy(),k=1,axes=(3,4))
-        rot6=np.rot90(self.samples.copy(),k=2,axes=(3,4))
-        self.samples = np.concatenate((self.samples, rot,rot2,rot3,rot4,rot5,rot6), axis=0) # (56000, 1, 40, 40, 40)
-
-        np.random.shuffle(self.samples)
         self.dataDims = {
             'classes' : len(np.unique(self.samples)), # 3 classes: 0, 1-H, 2-O
             'input x dim' : self.samples.shape[-1],
@@ -49,20 +33,51 @@ class build_dataset(Dataset):
            # 'conditional mean' : self.conditional_mean,
            # 'conditional std' : self.conditional_std
         }
-        a_file = open("datadims.pkl", "wb")
-        pickle.dump(self.dataDims, a_file)
-        a_file.close()
-	
-        # normalize pixel inputs
-        self.samples[:,0,:,:,:] = np.array((self.samples[:,0] + 1)/(self.dataDims['classes'])) # normalize inputs on 0--1
 
-        torch.cuda.empty_cache()
+        # normalize pixel inputs
+        self.samples[:,0,:,:,:] = np.array((self.samples[:,0] + 1)/(self.dataDims['classes']), dtype=float) # normalize inputs on 0--1
+
+        train_size = int(0.8 * len(self.samples))  # split data into training and test sets
+        # test_size = len(self.samples) - train_size
+        if self.split == 'train':
+            self.samples = self.samples[:train_size]
+        else:
+            self.samples = self.samples[train_size:]
+        # torch.cuda.empty_cache()
+
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx):
-        return self.samples[idx]
-    
+        return torch.from_numpy(self.samples[idx].copy())
+
+    def process_raw_data(self):
+        if self.cfg.training_dataset == '3d-idealgas':
+            samples = np.load('data/hard_sphere_gas_1000.npy', allow_pickle=True)
+        elif self.cfg.training_dataset == '3d-water':
+            samples = np.load('data/water_648atoms/water.npy', allow_pickle=True) # array(1000, 648, 3)
+            samples_identity = np.load('data/water_648atoms/water_identity.npy', allow_pickle=True) # array(1000, 648)
+        elif self.cfg.training_dataset == 'sb2s3':
+            samples = np.load('data/sb2s3_3000K_480atoms_5000frames/3000K_positions.npy', allow_pickle=True)
+            samples_identity = np.load('data/sb2s3_3000K_480atoms_5000frames/3000K_element_symbols.npy', allow_pickle=True)
+
+        samples = transform_data_2(samples, samples_identity)
+
+        samples = np.expand_dims(samples, axis=1) # (1000, 80, 80, 80)
+        ##### Data Augmentation
+        samples=np.concatenate((samples[:,:,0:40,0:40,0:40],samples[:,:,40:,40:,40:],samples[:,:,40:,0:40,0:40],samples[:,:,0:40,40:,0:40],samples[:,:,0:40,0:40,40:],samples[:,:,0:40,40:,40:],samples[:,:,40:,0:40,40:],samples[:,:,40:,40:,0:40]))
+        rot=np.rot90(samples.copy(),k=1,axes=(2,3)) # (8000, 1, 40, 40, 40)
+        rot2=np.rot90(samples.copy(),k=2,axes=(2,3))
+        rot3=np.rot90(samples.copy(),k=1,axes=(2,4))
+        rot4=np.rot90(samples.copy(),k=2,axes=(2,4))
+        rot5=np.rot90(samples.copy(),k=1,axes=(3,4))
+        rot6=np.rot90(samples.copy(),k=2,axes=(3,4))
+        samples = np.concatenate((samples, rot,rot2,rot3,rot4,rot5,rot6), axis=0) # (56000, 1, 40, 40, 40)
+
+        np.random.seed(self.cfg.dataset_seed)
+        np.random.shuffle(samples)
+        np.save(self.cfg.CACHE_FILE, samples)
+        return samples
 
 
 def transform_data(sample):
@@ -102,19 +117,10 @@ def transform_data_3(sample):
     return newdata
 
 
+
 def get_dataset(cfg):
-    dataset = build_dataset(cfg)  # get data
-    dataDims = dataset.dataDims
-    print(['dataset',len(dataset)])
-    train_size = int(0.8 * len(dataset))  # split data into training and test sets
-    test_size = len(dataset) - train_size
-    train_dataset, test_dataset = torch.utils.data.Subset(dataset, [range(train_size),range(train_size,test_size + train_size)])  # split it the same way every time
+    train_dataset = build_dataset(cfg, split='train')
+    test_dataset = build_dataset(cfg, split='test')
+    dataDims = train_dataset.dataDims
     return train_dataset, test_dataset, dataDims
 
-
-def get_dataloaders(cfg):
-    train_dataset, test_dataset, dataDims = get_dataset(cfg)
-    tr = data.DataLoader(train_dataset, batch_size=cfg.batch_size, shuffle=True, num_workers= 0, pin_memory=True)  # build dataloaders
-    te = data.DataLoader(test_dataset, batch_size=cfg.batch_size, shuffle=False, num_workers= 0, pin_memory=True)
-    print(type(te),len(te))
-    return tr, te, dataDims
